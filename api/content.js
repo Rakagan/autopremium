@@ -1,4 +1,4 @@
-import { sql } from '@vercel/postgres';
+import { getDb } from './_db.js';
 
 function isAdmin(req) {
   const cookie = req.headers.cookie || '';
@@ -13,33 +13,29 @@ export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(200).end();
 
+  const db = getDb();
+
   try {
-    // GET /api/content — returns all content rows merged into a single object
     if (req.method === 'GET') {
-      const { rows } = await sql`SELECT key, data FROM page_content`;
-      // If no rows yet, return null so the frontend uses its defaults
+      const { rows } = await db.execute('SELECT key, data FROM page_content');
       if (!rows.length) return res.status(200).json(null);
       const merged = {};
-      rows.forEach(r => { merged[r.key] = r.data; });
+      rows.forEach(r => { merged[r.key] = JSON.parse(r.data); });
       return res.status(200).json(merged);
     }
 
-    if (!isAdmin(req)) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
+    if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-    // PUT /api/content — body is the full pageContent object; upsert each key
     if (req.method === 'PUT') {
       const content = req.body;
       if (!content || typeof content !== 'object') {
         return res.status(400).json({ error: 'Invalid body' });
       }
       for (const [key, value] of Object.entries(content)) {
-        await sql`
-          INSERT INTO page_content (key, data)
-          VALUES (${key}, ${JSON.stringify(value)})
-          ON CONFLICT (key) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
-        `;
+        await db.execute({
+          sql: 'INSERT INTO page_content (key, data) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET data = excluded.data, updated_at = CURRENT_TIMESTAMP',
+          args: [key, JSON.stringify(value)],
+        });
       }
       return res.status(200).json({ ok: true });
     }
